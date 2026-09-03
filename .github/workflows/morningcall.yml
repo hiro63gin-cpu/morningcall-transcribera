@@ -2,12 +2,18 @@ name: NAB Morning Call
 
 on:
   schedule:
-    - cron: '45 5 * * *'
+    - cron: '45,55 5 * * *'
+      timezone: 'Asia/Tokyo'
+    - cron: '5,15,25,35,45,55 6 * * *'
       timezone: 'Asia/Tokyo'
   workflow_dispatch:
 
 permissions:
   contents: write
+
+concurrency:
+  group: nab-morning-call
+  cancel-in-progress: false
 
 jobs:
   morningcall:
