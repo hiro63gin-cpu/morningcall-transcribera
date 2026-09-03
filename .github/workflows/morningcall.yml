@@ -2,7 +2,7 @@ name: NAB Morning Call
 
 on:
   schedule:
-    - cron: '30 6 * * *'
+    - cron: '45 5 * * *'
       timezone: 'Asia/Tokyo'
   workflow_dispatch:
 
