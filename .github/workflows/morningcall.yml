@@ -7,6 +7,11 @@ on:
     - cron: '5,15,25,35,45,55 6 * * *'
       timezone: 'Asia/Tokyo'
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/morningcall.py'
 
 permissions:
   contents: write
@@ -18,7 +23,7 @@ concurrency:
 jobs:
   morningcall:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -28,6 +33,13 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
+
+      - name: Install ffmpeg
+        run: |
+          if ! command -v ffmpeg >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y ffmpeg
+          fi
 
       - name: Install dependencies
         run: pip install -r requirements.txt
