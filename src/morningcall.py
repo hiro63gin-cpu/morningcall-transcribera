@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,6 +14,7 @@ RSS_URL = "https://feeds.acast.com/public/shows/631a89913c2be9001415dc41"
 STATE_PATH = Path("state/latest.json")
 REPORT_DIR = Path("reports")
 AUDIO_DIR = Path(".tmp")
+CHUNK_SECONDS = 1200  # Keep each chunk safely below the model's 1400-second limit.
 
 
 def get_latest_episode():
@@ -53,7 +55,12 @@ def load_state():
 def save_state(episode):
     STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     STATE_PATH.write_text(
-        json.dumps({"guid": episode["guid"], "title": episode["title"], "pub_date": episode["pub_date"]}, ensure_ascii=False, indent=2) + "\n",
+        json.dumps(
+            {"guid": episode["guid"], "title": episode["title"], "pub_date": episode["pub_date"]},
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
         encoding="utf-8",
     )
 
@@ -75,15 +82,58 @@ def download_audio(url):
     return path
 
 
+def split_audio(audio_path):
+    AUDIO_DIR.mkdir(exist_ok=True)
+    for old_chunk in AUDIO_DIR.glob("chunk_*.mp3"):
+        old_chunk.unlink()
+
+    pattern = AUDIO_DIR / "chunk_%03d.mp3"
+    command = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        str(audio_path),
+        "-f",
+        "segment",
+        "-segment_time",
+        str(CHUNK_SECONDS),
+        "-reset_timestamps",
+        "1",
+        "-c",
+        "copy",
+        str(pattern),
+    ]
+    subprocess.run(command, check=True)
+    chunks = sorted(AUDIO_DIR.glob("chunk_*.mp3"))
+    if not chunks:
+        raise RuntimeError("ffmpeg did not create any audio chunks")
+    print(f"Prepared {len(chunks)} audio chunk(s) for transcription")
+    return chunks
+
+
 def transcribe(audio_path):
     client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-    with audio_path.open("rb") as f:
-        result = client.audio.transcriptions.create(
-            model="gpt-4o-transcribe",
-            file=f,
-            language="en",
-        )
-    return result.text
+    chunks = split_audio(audio_path)
+    transcripts = []
+
+    for index, chunk_path in enumerate(chunks, start=1):
+        print(f"Transcribing chunk {index}/{len(chunks)}: {chunk_path.name}")
+        with chunk_path.open("rb") as f:
+            result = client.audio.transcriptions.create(
+                model="gpt-4o-transcribe",
+                file=f,
+                language="en",
+            )
+        text = (result.text or "").strip()
+        if text:
+            transcripts.append(text)
+
+    if not transcripts:
+        raise RuntimeError("Transcription returned no text")
+    return "\n\n".join(transcripts)
 
 
 def create_japanese_report(episode, transcript):
@@ -128,7 +178,11 @@ def main():
     report = create_japanese_report(episode, transcript)
 
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
-    date_part = episode["pub_date"][:16].replace(":", "-") if episode["pub_date"] else datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    date_part = (
+        episode["pub_date"][:16].replace(":", "-")
+        if episode["pub_date"]
+        else datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    )
     filename = safe_filename(f"{date_part}-{episode['title']}") + ".md"
     output = f"""# NAB Morning Call — {episode['title']}\n\n- **公開日:** {episode['pub_date']}\n- **音声:** {episode['audio_url']}\n\n> This report is a detailed Japanese summary based on the episode audio. It is not a verbatim transcript or line-by-line translation.\n\n{report}\n"""
     (REPORT_DIR / filename).write_text(output, encoding="utf-8")
